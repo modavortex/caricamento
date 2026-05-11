@@ -9,6 +9,7 @@
 <meta name="theme-color" content="#1D3557">
 <title>LU.SA. Etichette</title>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   :root{
@@ -143,6 +144,7 @@
     <button class="btn-rimuovi" id="btn-rimuovi" onclick="rimuoviFoto()">Rimuovi foto</button>
     <input type="file" id="input-camera" accept="image/*" capture="environment" onchange="caricaFoto(this)">
     <input type="file" id="input-gallery" accept="image/*" onchange="caricaFoto(this)">
+
   </div>
 </div>
 
@@ -173,8 +175,9 @@
     <div class="preview-wrap" id="preview-wrap"></div>
     <div class="modal-actions">
       <button class="btn-close-modal" onclick="chiudiModal()">Chiudi</button>
-      <button class="btn-stampa-modal" onclick="stampa()">🖨 Stampa</button>
+      <button class="btn-stampa-modal" onclick="stampa()">🖨 Etichetta</button>
     </div>
+    <button onclick="schedaProdotto()" style="display:block;width:100%;margin-top:10px;padding:14px;border-radius:12px;border:1.5px solid var(--accent);background:var(--accent-light);color:var(--accent);font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;">📦 Scheda Prodotto (foto + barcode)</button>
   </div>
 </div>
 
@@ -352,10 +355,58 @@ async function genera() {
 
 async function salvaEtichetta(label) {
   try {
-    const r = await apiCall({action:'saveEtichetta',codice:label.codice,partId:label.partId,pa:label.pa,pv:label.pv,stagione:label.stagione,week:label.week,foto:''});
-    if (r.ok) { showBanner('ok','✓ Salvato sul foglio — riga '+r.row); setTimeout(hideBanner,3000); caricaStorico(); }
-    else showBanner('warn','⚠️ Non salvato: '+(r.error||''));
+    // Step 1: salva etichetta sul foglio (senza foto ancora)
+    const r = await apiCall({
+      action:'saveEtichetta',
+      codice:label.codice, partId:label.partId,
+      pa:label.pa, pv:label.pv,
+      stagione:label.stagione, week:label.week,
+      foto:'caricamento...'
+    });
+    if (!r.ok) { showBanner('warn','⚠️ Non salvato: '+(r.error||'')); return; }
+
+    showBanner('ok','✓ Salvato sul foglio — riga '+r.row);
+    caricaStorico();
+
+    // Step 2: se c'è una foto, mandala via POST all'Apps Script
+    if (label.foto) {
+      showBanner('ok','⏳ Caricamento foto su Drive...');
+      await caricaFotoDrive(label.foto, label.codice, r.row);
+    } else {
+      // Nessuna foto: aggiorna cella con stringa vuota
+      await apiCall({action:'clearFoto', row:r.row});
+      setTimeout(hideBanner, 3000);
+    }
   } catch(e) { showBanner('warn','⚠️ Offline — solo locale.'); }
+}
+
+async function caricaFotoDrive(base64, codice, row) {
+  try {
+    // Invia foto via POST (unico modo per payload grandi)
+    const body = JSON.stringify({
+      key: API_KEY,
+      action: 'uploadFoto',
+      base64: base64,
+      codice: codice,
+      row: row
+    });
+    const resp = await fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      body: body,
+      redirect: 'follow'
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      showBanner('ok','✓ Foto salvata su Drive');
+      setTimeout(hideBanner, 3000);
+    } else {
+      showBanner('warn','⚠️ Etichetta salvata, foto non caricata: '+(data.error||''));
+      setTimeout(hideBanner, 4000);
+    }
+  } catch(e) {
+    showBanner('warn','⚠️ Etichetta salvata, foto offline.');
+    setTimeout(hideBanner, 4000);
+  }
 }
 
 // ─── STORICO ─────────────────────────────────────────────
@@ -498,69 +549,235 @@ function buildLabel(label) {
   return div;
 }
 
-// ─── STAMPA — tutto inline, nessuna nuova finestra ──────
-// Safari iPhone: window.open() rompe la navigazione.
-// Soluzione: inietta l'etichetta nel #print-area, poi window.print().
-// @media print nasconde tutto il resto. Dopo la stampa ripulisce.
-function stampa() {
+// ─── STAMPA — genera PDF reale con jsPDF ────────────────
+// Evita completamente window.print() che su Safari iPhone
+// stampa la pagina intera con URL, data, header, footer.
+// jsPDF genera un PDF pulito 5x3cm che Safari apre nel viewer
+// e da lì si stampa o salva — nessuna nuova finestra bloccante.
+async function stampa() {
   const fmt = (currentLabel._formato === '5x2.5') ? '5x2.5' : '5x3';
-  const LH  = fmt === '5x2.5' ? '2.5cm' : '3cm';
+  const LH_CM = fmt === '5x2.5' ? 2.5 : 3.0;
+  const LW_CM = 5.0;
 
   const artStr  = 'Art : ' + currentLabel.artDisplay;
   const codeStr = currentLabel.codice;
 
-  // Genera SVG barcode
+  // Genera barcode come canvas tramite SVG
   const svgEl = document.createElementNS('http://www.w3.org/2000/svg','svg');
-  JsBarcode(svgEl, codeStr, {format:'CODE128',displayValue:false,margin:0,background:'#fff',lineColor:'#000'});
-
-  const printArea = document.getElementById('print-area');
-  printArea.innerHTML = '';
-  printArea.className = fmt === '5x2.5' ? 'formato-5x25' : '';
-
-  // Etichetta con misure in mm/cm — il browser le rispetta in stampa
-  const wrap = document.createElement('div');
-  wrap.style.cssText = [
-    'width:5cm', `height:${LH}`,
-    'padding:1mm',
-    'background:#fff',
-    'display:flex',
-    'flex-direction:column',
-    'align-items:stretch',
-    'overflow:hidden',
-    'box-sizing:border-box'
-  ].join(';');
-
-  const artDiv = document.createElement('div');
-  artDiv.style.cssText = "font-family:'Courier New',Courier,monospace;font-weight:900;font-size:3.5mm;color:#000;white-space:nowrap;line-height:1.2;flex-shrink:0;";
-  artDiv.textContent = artStr;
-
-  const bcWrap = document.createElement('div');
-  bcWrap.style.cssText = 'flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;min-height:0;';
-  svgEl.style.cssText = 'width:100%;height:100%;display:block;';
-  bcWrap.appendChild(svgEl);
-
-  const codeDiv = document.createElement('div');
-  codeDiv.style.cssText = "font-family:'Courier New',Courier,monospace;font-weight:900;font-size:2.2mm;color:#000;text-align:center;white-space:nowrap;letter-spacing:0.1mm;line-height:1.2;flex-shrink:0;";
-  codeDiv.textContent = codeStr;
-
-  wrap.appendChild(artDiv);
-  wrap.appendChild(bcWrap);
-  wrap.appendChild(codeDiv);
-  printArea.appendChild(wrap);
-
-  // Aggiorna @page size dinamicamente
-  let pps = document.getElementById('pps');
-  if (!pps) { pps=document.createElement('style'); pps.id='pps'; document.head.appendChild(pps); }
-  pps.textContent = `@media print{@page{size:5cm ${LH};margin:0mm}}`;
-
-  // Breve delay per assicurarsi che il DOM sia pronto, poi stampa
-  requestAnimationFrame(()=>{
-    requestAnimationFrame(()=>{
-      window.print();
-      // Dopo la stampa ripulisce e torna alla pagina normalmente
-      setTimeout(()=>{ printArea.innerHTML=''; printArea.className=''; }, 500);
-    });
+  JsBarcode(svgEl, codeStr, {
+    format:'CODE128', displayValue:false,
+    margin:0, background:'#ffffff', lineColor:'#000000'
   });
+
+  // Converti SVG in immagine PNG via canvas
+  const svgData  = new XMLSerializer().serializeToString(svgEl);
+  const svgBlob  = new Blob([svgData], {type:'image/svg+xml;charset=utf-8'});
+  const svgUrl   = URL.createObjectURL(svgBlob);
+
+  const bcImg = await new Promise((res,rej)=>{
+    const img = new Image();
+    img.onload = ()=>res(img);
+    img.onerror = rej;
+    img.src = svgUrl;
+  });
+
+  const cvs = document.createElement('canvas');
+  // Alta risoluzione per stampa nitida
+  cvs.width  = Math.round(LW_CM * 203 / 2.54);
+  cvs.height = Math.round(LH_CM * 203 / 2.54);
+  const ctx  = cvs.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, cvs.width, cvs.height);
+  URL.revokeObjectURL(svgUrl);
+
+  // Layout in pixel (203dpi)
+  const DPI   = 203 / 2.54;
+  const W     = cvs.width;
+  const H     = cvs.height;
+  const PAD   = Math.round(1 * DPI / 10); // 1mm padding
+  const IW    = W - PAD * 2;
+
+  // Art row
+  const artFontPx = Math.round(3.5 * DPI / 25.4);
+  ctx.fillStyle = '#000';
+  ctx.font = `900 ${artFontPx}px "Courier New", monospace`;
+  ctx.textBaseline = 'top';
+  ctx.fillText(artStr, PAD, PAD);
+  const artH = Math.round(artFontPx * 1.3);
+
+  // Code row (bottom)
+  const codeFontMax = Math.floor(IW / (codeStr.length * 0.601));
+  const codeFontPx  = Math.min(codeFontMax, Math.round(2.5 * DPI / 25.4));
+  ctx.font = `900 ${codeFontPx}px "Courier New", monospace`;
+  ctx.textBaseline = 'bottom';
+  ctx.textAlign = 'center';
+  ctx.fillText(codeStr, W/2, H - PAD);
+  const codeH = Math.round(codeFontPx * 1.3);
+
+  // Barcode al centro
+  const bcY = PAD + artH + 2;
+  const bcH = H - bcY - codeH - PAD - 2;
+  ctx.drawImage(bcImg, PAD, bcY, IW, bcH);
+
+  // Genera PDF con jsPDF
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({
+    orientation: 'landscape',
+    unit: 'cm',
+    format: [LW_CM, LH_CM]
+  });
+
+  const pngData = cvs.toDataURL('image/png');
+  doc.addImage(pngData, 'PNG', 0, 0, LW_CM, LH_CM);
+
+  // Apri PDF — Safari lo apre inline nel browser, da lì si stampa
+  const pdfBlob = doc.output('blob');
+  const pdfUrl  = URL.createObjectURL(pdfBlob);
+  window.location.href = pdfUrl;
+  setTimeout(()=>URL.revokeObjectURL(pdfUrl), 60000);
+}
+
+// ─── SCHEDA PRODOTTO (foto + barcode) ───────────────────
+// Combina foto prodotto e barcode in un'unica immagine
+// scaricabile/stampabile. Tutto client-side con Canvas.
+async function schedaProdotto() {
+  const label   = currentLabel;
+  const artStr  = 'Art : ' + label.artDisplay;
+  const codeStr = label.codice;
+  const hasFoto = !!label.foto;
+
+  // Dimensioni scheda: A6 orizzontale ~105x148mm @150dpi
+  // Ma usiamo px: 600x800 portrait — buono per stampa e schermo
+  const CW = 600;  // canvas width
+  const CH = 800;  // canvas height
+  const PAD = 20;
+
+  const canvas = document.createElement('canvas');
+  canvas.width  = CW;
+  canvas.height = CH;
+  const ctx = canvas.getContext('2d');
+
+  // Sfondo bianco
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, CW, CH);
+
+  // ── SEZIONE FOTO (metà superiore) ──────────────────────
+  const fotoH = hasFoto ? Math.round(CH * 0.55) : 0;
+
+  if (hasFoto) {
+    await new Promise((res) => {
+      const img = new Image();
+      img.onload = () => {
+        // Crop centrato (object-fit: cover)
+        const scale = Math.max(CW / img.width, fotoH / img.height);
+        const sw = CW / scale;
+        const sh = fotoH / scale;
+        const sx = (img.width  - sw) / 2;
+        const sy = (img.height - sh) / 2;
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, CW, fotoH);
+        res();
+      };
+      img.onerror = () => res(); // foto non disponibile, continua
+      img.src = label.foto;
+    });
+
+    // Linea separatrice
+    ctx.strokeStyle = '#cccccc';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, fotoH);
+    ctx.lineTo(CW, fotoH);
+    ctx.stroke();
+  }
+
+  // ── SEZIONE ETICHETTA (metà inferiore) ─────────────────
+  const labelTop  = fotoH + PAD;
+  const labelArea = CH - fotoH - PAD * 2;
+
+  // Logo / nome azienda
+  ctx.fillStyle = '#1D3557';
+  ctx.font = 'bold 22px "Courier New", monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText('LU.SA. SRL', PAD, labelTop);
+
+  // Art
+  ctx.fillStyle = '#000000';
+  ctx.font = 'bold 32px "Courier New", monospace';
+  ctx.fillText(artStr, PAD, labelTop + 34);
+
+  // Barcode
+  const bcTop = labelTop + 80;
+  const bcH   = Math.round(labelArea * 0.42);
+  const bcW   = CW - PAD * 2;
+
+  const svgEl = document.createElementNS('http://www.w3.org/2000/svg','svg');
+  JsBarcode(svgEl, codeStr, {
+    format:'CODE128', displayValue:false,
+    margin:0, background:'#ffffff', lineColor:'#000000',
+    width: 2, height: bcH
+  });
+  const svgData = new XMLSerializer().serializeToString(svgEl);
+  const svgBlob = new Blob([svgData],{type:'image/svg+xml;charset=utf-8'});
+  const svgUrl  = URL.createObjectURL(svgBlob);
+
+  await new Promise((res,rej) => {
+    const img = new Image();
+    img.onload = () => {
+      ctx.drawImage(img, PAD, bcTop, bcW, bcH);
+      URL.revokeObjectURL(svgUrl);
+      res();
+    };
+    img.onerror = rej;
+    img.src = svgUrl;
+  });
+
+  // Codice testo sotto barcode
+  const codeFontSize = Math.min(Math.floor(bcW / (codeStr.length * 0.601)), 28);
+  ctx.fillStyle = '#000000';
+  ctx.font = `bold ${codeFontSize}px "Courier New", monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText(codeStr, CW/2, bcTop + bcH + 8);
+
+  // Prezzo vendita in grande
+  const pvEur = parseFloat(label.pv).toFixed(2).replace('.',',') + ' €';
+  ctx.font = 'bold 36px -apple-system, sans-serif';
+  ctx.fillStyle = '#1D3557';
+  ctx.textAlign = 'right';
+  ctx.fillText(pvEur, CW - PAD, bcTop + bcH + 8);
+
+  // Bordo etichetta
+  ctx.strokeStyle = '#1D3557';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(1, 1, CW-2, CH-2);
+
+  // ── SCARICA / CONDIVIDI ────────────────────────────────
+  const dataUrl  = canvas.toDataURL('image/jpeg', 0.92);
+  const fileName = codeStr + '_scheda.jpg';
+
+  // Su mobile usa Web Share API se disponibile (condividi/salva)
+  if (navigator.share && navigator.canShare) {
+    try {
+      const blob = await (await fetch(dataUrl)).blob();
+      const file = new File([blob], fileName, {type:'image/jpeg'});
+      if (navigator.canShare({files:[file]})) {
+        await navigator.share({
+          files: [file],
+          title: 'Scheda ' + codeStr,
+        });
+        return;
+      }
+    } catch(e) {
+      // fallback download
+    }
+  }
+
+  // Fallback: download diretto
+  const a = document.createElement('a');
+  a.href     = dataUrl;
+  a.download = fileName;
+  a.click();
 }
 
 // ─── BANNER ──────────────────────────────────────────────
