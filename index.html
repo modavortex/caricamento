@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="LU.SA.">
+<meta name="theme-color" content="#1D3557">
+<title>LU.SA. Etichette</title>
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --bg:#F5F3EE;--card:#FFF;--border:rgba(0,0,0,0.12);
+    --text:#1A1A1A;--muted:#6B6B6B;--accent:#1D3557;--accent-light:#E8EDF3;
+    --danger:#C0392B;--radius:12px;--radius-sm:8px;
+  }
+  body{font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding-bottom:120px;-webkit-text-size-adjust:100%}
+  header{background:var(--accent);color:#fff;padding:18px 20px 16px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:100}
+  header h1{font-size:20px;font-weight:700;letter-spacing:-0.3px}
+  header .sub{font-size:13px;opacity:.65;font-weight:400}
+  .sync-dot{width:8px;height:8px;border-radius:50%;background:#aaa;margin-left:auto;flex-shrink:0;transition:background .3s}
+  .sync-dot.ok{background:#4CD964}.sync-dot.err{background:#FF3B30}.sync-dot.loading{background:#FF9500;animation:pulse 1s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+  .counter-pill{background:rgba(255,255,255,.18);border-radius:20px;padding:4px 12px;font-size:13px;font-weight:700;font-family:'SF Mono',monospace;letter-spacing:.5px}
+  .banner{margin:14px 14px 0;border-radius:var(--radius);padding:12px 14px;font-size:13px;font-weight:500;display:none;align-items:center;gap:8px}
+  .banner.warn{background:#FEF3CD;color:#7D4E00;border:.5px solid #F5C842;display:flex}
+  .banner.err{background:#FDE8E8;color:#8B0000;border:.5px solid #F5A0A0;display:flex}
+  .banner.ok{background:#E3F5EC;color:#0A4A2A;border:.5px solid #7BCCA2;display:flex}
+  .section{background:var(--card);margin:14px 14px 0;border-radius:var(--radius);border:.5px solid var(--border);overflow:hidden}
+  .section-title{font-size:11px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);padding:14px 16px 10px;border-bottom:.5px solid var(--border)}
+  .field-row{display:flex;align-items:center;padding:0 16px;border-bottom:.5px solid var(--border);min-height:54px;gap:12px}
+  .field-row:last-child{border-bottom:none}
+  label{font-size:14px;color:var(--text);flex:0 0 130px;font-weight:500}
+  input[type=number],select{flex:1;border:none;background:transparent;font-size:16px;color:var(--text);text-align:right;padding:14px 0;outline:none;-webkit-appearance:none;font-family:inherit}
+  select{cursor:pointer;font-size:15px}
+  .week-display{flex:1;text-align:right;font-size:15px;font-weight:600;color:var(--accent)}
+  .week-sub{font-size:12px;color:var(--muted);font-weight:400;display:block}
+  .art-preview{flex:1;text-align:right;font-size:17px;font-weight:700;color:var(--accent);font-family:'SF Mono',monospace;letter-spacing:1px}
+  .foto-area{padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+  .foto-preview{width:100%;max-height:160px;object-fit:cover;border-radius:var(--radius-sm);border:.5px solid var(--border);display:none}
+  .foto-btns{display:flex;gap:10px}
+  .btn-foto{flex:1;padding:12px 8px;border-radius:var(--radius-sm);border:.5px solid var(--border);background:var(--card);font-size:14px;font-weight:600;cursor:pointer;color:var(--accent);font-family:inherit;text-align:center;-webkit-tap-highlight-color:transparent}
+  .btn-foto:active{background:var(--accent-light)}
+  .btn-rimuovi{background:none;border:none;color:var(--danger);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;padding:4px 0;display:none}
+  input[type=file]{display:none}
+  .btn-genera{display:block;width:calc(100% - 28px);margin:14px auto 0;background:var(--accent);color:#fff;border:none;border-radius:var(--radius);font-size:17px;font-weight:700;padding:17px;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:opacity .15s}
+  .btn-genera:active{opacity:.8}.btn-genera:disabled{opacity:.5}
+  .codice-display{background:var(--accent-light);margin:14px 14px 0;border-radius:var(--radius);border:.5px solid rgba(29,53,87,.2);padding:16px;display:none}
+  .codice-label{font-size:11px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
+  .codice-value{font-size:24px;font-weight:700;letter-spacing:2px;color:var(--accent);font-family:'SF Mono','Courier New',monospace;word-break:break-all}
+  .codice-parts{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .part-badge{background:rgba(29,53,87,.1);color:var(--accent);font-size:11px;font-weight:600;padding:3px 8px;border-radius:20px;font-family:'SF Mono',monospace}
+  .storico-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 10px;border-bottom:.5px solid var(--border)}
+  .storico-label{font-size:11px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+  .btn-refresh{font-size:13px;color:var(--accent);background:none;border:none;cursor:pointer;font-family:inherit;font-weight:600;padding:4px 0}
+  .storico-item{display:flex;align-items:center;padding:12px 16px;border-bottom:.5px solid var(--border);gap:12px;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:background .1s}
+  .storico-item:last-child{border-bottom:none}
+  .storico-item:active{background:var(--accent-light)}
+  .storico-code{font-family:'SF Mono',monospace;font-size:13px;font-weight:700;color:var(--accent);letter-spacing:1px}
+  .storico-meta{font-size:12px;color:var(--muted);margin-top:2px}
+  .btn-stampa-item{background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);font-size:12px;font-weight:600;padding:7px 13px;cursor:pointer;font-family:inherit;flex-shrink:0;-webkit-tap-highlight-color:transparent}
+  .empty-state{padding:28px 16px;text-align:center;color:var(--muted);font-size:14px}
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:200;align-items:flex-end;justify-content:center}
+  .modal-overlay.open{display:flex}
+  .modal{background:var(--card);border-radius:20px 20px 0 0;width:100%;max-width:480px;padding:20px;padding-bottom:calc(20px + env(safe-area-inset-bottom));max-height:90vh;overflow-y:auto}
+  .modal-handle{width:36px;height:4px;background:var(--border);border-radius:2px;margin:0 auto 16px}
+  .modal-title{font-size:17px;font-weight:700;margin-bottom:4px}
+  .modal-subtitle{font-size:13px;color:var(--muted);margin-bottom:16px}
+  .preview-wrap{display:flex;justify-content:center;margin:12px 0}
+  .modal-actions{display:flex;gap:10px;margin-top:14px}
+  .btn-stampa-modal{flex:1;background:var(--accent);color:#fff;border:none;border-radius:var(--radius);font-size:16px;font-weight:700;padding:15px;cursor:pointer;font-family:inherit;-webkit-tap-highlight-color:transparent}
+  .btn-stampa-modal:active{opacity:.8}
+  .btn-close-modal{background:var(--bg);color:var(--text);border:.5px solid var(--border);border-radius:var(--radius);font-size:15px;font-weight:600;padding:15px 20px;cursor:pointer;font-family:inherit;-webkit-tap-highlight-color:transparent}
+  @media print{
+    @page{margin:0}
+    body>*:not(#print-area){display:none!important}
+    #print-area{display:flex!important;position:fixed;inset:0;align-items:center;justify-content:center;background:white}
+  }
+  #print-area{display:none}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>LU.SA.</h1>
+  <span class="sub">Etichette</span>
+  <div class="counter-pill" id="header-counter">#0000001</div>
+  <div class="sync-dot loading" id="sync-dot"></div>
+</header>
+
+<div class="banner" id="banner"></div>
+
+<div class="section">
+  <div class="section-title">Dati prodotto</div>
+  <div class="field-row">
+    <label>Prezzo acquisto</label>
+    <input type="number" id="prezzo-acquisto" placeholder="0.00" min="0" step="0.01" inputmode="decimal">
+  </div>
+  <div class="field-row">
+    <label>Prezzo vendita</label>
+    <input type="number" id="prezzo-vendita" placeholder="0.00" min="0" step="0.01" inputmode="decimal" oninput="aggiornaArt()">
+  </div>
+  <div class="field-row">
+    <label>Art. sito (+0,99)</label>
+    <div class="art-preview" id="art-preview">—</div>
+  </div>
+  <div class="field-row">
+    <label>Stagione</label>
+    <select id="stagione">
+      <option value="P">P — Primavera</option>
+      <option value="E">E — Estate</option>
+      <option value="A">A — Autunno</option>
+      <option value="I">I — Inverno</option>
+    </select>
+  </div>
+  <div class="field-row">
+    <label>Settimana</label>
+    <div class="week-display">
+      <span id="week-num">--</span>
+      <span class="week-sub" id="week-date"></span>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">Foto prodotto (opzionale)</div>
+  <div class="foto-area">
+    <img id="foto-preview" class="foto-preview" alt="Anteprima foto">
+    <div class="foto-btns">
+      <button class="btn-foto" onclick="document.getElementById('input-camera').click()">📷 Fotocamera</button>
+      <button class="btn-foto" onclick="document.getElementById('input-gallery').click()">🖼 Galleria</button>
+    </div>
+    <button class="btn-rimuovi" id="btn-rimuovi" onclick="rimuoviFoto()">Rimuovi foto</button>
+    <input type="file" id="input-camera" accept="image/*" capture="environment" onchange="caricaFoto(this)">
+    <input type="file" id="input-gallery" accept="image/*" onchange="caricaFoto(this)">
+  </div>
+</div>
+
+<button class="btn-genera" id="btn-genera" onclick="genera()">Genera Etichetta</button>
+
+<div class="codice-display" id="codice-display">
+  <div class="codice-label">Codice generato</div>
+  <div class="codice-value" id="codice-value"></div>
+  <div class="codice-parts" id="codice-parts"></div>
+</div>
+
+<div class="section" style="margin-top:14px">
+  <div class="storico-header">
+    <span class="storico-label">Storico dal foglio</span>
+    <button class="btn-refresh" onclick="caricaStorico()">↻ Aggiorna</button>
+  </div>
+  <div id="storico-list"><div class="empty-state">Caricamento...</div></div>
+</div>
+
+<div class="modal-overlay" id="modal" onclick="chiudiModal(event)">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">Anteprima etichetta</div>
+    <div class="modal-subtitle">Formato 5 × 3 cm</div>
+    <div class="preview-wrap" id="preview-wrap"></div>
+    <div class="modal-actions">
+      <button class="btn-close-modal" onclick="chiudiModal()">Chiudi</button>
+      <button class="btn-stampa-modal" onclick="stampa()">🖨 Stampa</button>
+    </div>
+  </div>
+</div>
+
+<div id="print-area"></div>
+
+<script>
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxKq5m_5-cihedUrbs_xu0hrCXQScdJ4psfxx2p7v_c2kvxbs8Tzgrxiwd4ds8IvQVJ4g/exec';
+const API_KEY = 'LUSA2024-X9K7-MODA';
+
+let currentLabel = null;
+let fotoBase64   = null;
+let counterOnline = null;
+
+// ─── PREZZI ──────────────────────────────────────────────
+// NEL CODICE: prezzo vendita esatto, in centesimi, 4 cifre
+// Es: pv=6.00 → "0600"  |  pv=12.50 → "1250"
+function pv2code(pv) {
+  return String(Math.round(parseFloat(pv) * 100)).padStart(4,'0').slice(-4);
+}
+
+// SULL'ETICHETTA (Art): prezzo vendita + 0,99, in centesimi, 4 cifre
+// Es: pv=6.00 → "0699"  |  pv=6.50 → "0749"  |  pv=12.00 → "1299"
+function pv2art(pv) {
+  return String(Math.round((parseFloat(pv) + 0.99) * 100)).padStart(4,'0').slice(-4);
+}
+
+function aggiornaArt() {
+  const pv = parseFloat(document.getElementById('prezzo-vendita').value);
+  document.getElementById('art-preview').textContent = isNaN(pv) ? '—' : pv2art(pv);
+}
+
+// ─── SETTIMANA ISO ────────────────────────────────────────
+function getWeek(d) {
+  const date = new Date(d);
+  date.setHours(0,0,0,0);
+  date.setDate(date.getDate() + 3 - (date.getDay()+6)%7);
+  const w1 = new Date(date.getFullYear(),0,4);
+  return 1 + Math.round(((date-w1)/86400000 - 3 + (w1.getDay()+6)%7)/7);
+}
+
+function initWeek() {
+  const now = new Date();
+  const w = getWeek(now);
+  document.getElementById('week-num').textContent = 'Settimana ' + String(w).padStart(2,'0');
+  document.getElementById('week-date').textContent = now.toLocaleDateString('it-IT',{day:'numeric',month:'long',year:'numeric'});
+}
+
+// ─── CODICE ACQUISTO ─────────────────────────────────────
+function pa2letters(n) {
+  const map=['Z','A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y'];
+  n = Math.max(0,Math.min(99,Math.round(n)));
+  return map[Math.floor(n/10)] + map[n%10];
+}
+
+// ─── JSONP API ───────────────────────────────────────────
+function apiCall(params) {
+  return new Promise((resolve,reject) => {
+    params.key = API_KEY;
+    const cb = 'cb_'+Date.now()+'_'+Math.floor(Math.random()*9999);
+    const qs = Object.entries(params).map(([k,v])=>k+'='+encodeURIComponent(v)).join('&');
+    const t = setTimeout(()=>{ cleanup(); reject(new Error('Timeout')); },12000);
+    function cleanup(){ clearTimeout(t); delete window[cb]; const s=document.getElementById(cb); if(s)s.remove(); }
+    window[cb] = data => { cleanup(); resolve(data); };
+    const s = document.createElement('script');
+    s.id = cb;
+    s.src = APPS_SCRIPT_URL+'?callback='+cb+'&'+qs;
+    s.onerror = ()=>{ cleanup(); reject(new Error('Network error')); };
+    document.head.appendChild(s);
+  });
+}
+
+// ─── INIT ────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded',()=>{ initWeek(); checkConnection(); });
+
+async function checkConnection() {
+  setSyncState('loading');
+  try {
+    const r = await apiCall({action:'ping'});
+    if (r.ok) { setSyncState('ok'); await caricaCounter(); await caricaStorico(); }
+    else throw new Error();
+  } catch(e) {
+    setSyncState('err');
+    showBanner('warn','⚠️ Offline — contatore locale attivo.');
+    usaCounterLocale();
+    caricaStoricoLocale();
+  }
+}
+
+function setSyncState(s) {
+  const d = document.getElementById('sync-dot');
+  d.className = 'sync-dot '+s;
+  d.title = s==='ok'?'Connesso al foglio Google':s==='err'?'Offline':'Connessione...';
+}
+
+// ─── COUNTER ─────────────────────────────────────────────
+async function caricaCounter() {
+  try {
+    const r = await apiCall({action:'getCounter'});
+    if (r.ok) { counterOnline=r.counter; setCounterUI(r.counter); }
+  } catch(e) { usaCounterLocale(); }
+}
+
+function usaCounterLocale() {
+  counterOnline = null;
+  setCounterUI(parseInt(localStorage.getItem('lusa_counter')||'1'));
+}
+
+function setCounterUI(n) {
+  document.getElementById('header-counter').textContent = '#'+String(n).padStart(7,'0');
+}
+
+// ─── GENERA ──────────────────────────────────────────────
+async function genera() {
+  const pa = parseFloat(document.getElementById('prezzo-acquisto').value);
+  const pv = parseFloat(document.getElementById('prezzo-vendita').value);
+  const stagione = document.getElementById('stagione').value;
+
+  if (isNaN(pa)||pa<0) { alert('Inserisci un prezzo di acquisto valido'); return; }
+  if (isNaN(pv)||pv<0) { alert('Inserisci un prezzo di vendita valido'); return; }
+
+  const btn = document.getElementById('btn-genera');
+  btn.disabled=true; btn.textContent='Generazione...';
+
+  try {
+    let counter;
+    if (counterOnline!==null) {
+      try {
+        const r = await apiCall({action:'incrementCounter'});
+        if (r.ok) { counter=r.counter; counterOnline=r.counter+1; setCounterUI(counterOnline); }
+        else throw new Error();
+      } catch(e) {
+        counter=parseInt(localStorage.getItem('lusa_counter')||'1');
+        localStorage.setItem('lusa_counter',String(counter+1));
+        setCounterUI(counter+1);
+      }
+    } else {
+      counter=parseInt(localStorage.getItem('lusa_counter')||'1');
+      localStorage.setItem('lusa_counter',String(counter+1));
+      setCounterUI(counter+1);
+    }
+
+    const week   = getWeek(new Date());
+    const partId = 'A'+String(counter).padStart(6,'0');
+    const partAcq = pa2letters(pa);
+    const partSett = String(week).padStart(2,'0');
+    const partStag = stagione;
+
+    // CODICE: usa prezzo vendita esatto
+    const partVendita = pv2code(pv);
+    const codice = partId + partAcq + partSett + partStag + partVendita;
+
+    // ART sull'etichetta: prezzo vendita + 0,99
+    const artDisplay = pv2art(pv);
+
+    currentLabel = {codice,pa,pv,stagione,week,partId,partAcq,partSett,partStag,partVendita,artDisplay,ts:new Date().toISOString(),foto:fotoBase64};
+
+    document.getElementById('codice-value').textContent = codice;
+    document.getElementById('codice-parts').innerHTML =
+      `<span class="part-badge">${partId}</span>` +
+      `<span class="part-badge" title="Acquisto €${pa.toFixed(2)}">${partAcq}</span>` +
+      `<span class="part-badge" title="Sett. ${week}">${partSett}</span>` +
+      `<span class="part-badge" title="Stagione">${partStag}</span>` +
+      `<span class="part-badge" title="Vendita €${pv.toFixed(2)}">${partVendita}</span>` +
+      `<span class="part-badge" title="Art sito €${(pv+0.99).toFixed(2)}">Art:${artDisplay}</span>`;
+    document.getElementById('codice-display').style.display='block';
+
+    salvaEtichetta(currentLabel);
+    salvaLocale(currentLabel);
+    apriModal(currentLabel);
+
+  } finally {
+    btn.disabled=false; btn.textContent='Genera Etichetta';
+  }
+}
+
+async function salvaEtichetta(label) {
+  try {
+    const r = await apiCall({action:'saveEtichetta',codice:label.codice,partId:label.partId,pa:label.pa,pv:label.pv,stagione:label.stagione,week:label.week,foto:''});
+    if (r.ok) { showBanner('ok','✓ Salvato sul foglio — riga '+r.row); setTimeout(hideBanner,3000); caricaStorico(); }
+    else showBanner('warn','⚠️ Non salvato: '+(r.error||''));
+  } catch(e) { showBanner('warn','⚠️ Offline — solo locale.'); }
+}
+
+// ─── STORICO ─────────────────────────────────────────────
+async function caricaStorico() {
+  try {
+    const r = await apiCall({action:'getStorico',limit:30});
+    if (r.ok) renderStorico(r.data);
+  } catch(e) { caricaStoricoLocale(); }
+}
+
+function renderStorico(data) {
+  const list = document.getElementById('storico-list');
+  if (!data||!data.length) { list.innerHTML='<div class="empty-state">Nessuna etichetta ancora</div>'; return; }
+  list.innerHTML = data.map(item=>{
+    const pvStr = parseFloat(item.pv||0).toFixed(2).replace('.',',')+' €';
+    const dateStr = (item.data||'')+(item.ora?' · '+item.ora:'');
+    const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(item))));
+    return `<div class="storico-item" data-b64="${b64}">
+      <div style="flex:1" onclick="apriDaB64(this.parentElement.dataset.b64)">
+        <div class="storico-code">${item.codice}</div>
+        <div class="storico-meta">${dateStr} · ${pvStr}</div>
+      </div>
+      <button class="btn-stampa-item" onclick="apriDaB64(this.parentElement.dataset.b64)">Stampa</button>
+    </div>`;
+  }).join('');
+}
+
+function apriDaB64(b64) {
+  try {
+    const item = JSON.parse(decodeURIComponent(escape(atob(b64))));
+    // Ricalcola artDisplay dal pv salvato — NON dalle ultime 4 cifre del codice
+    if (item.pv !== undefined && item.pv !== null) {
+      item.artDisplay = pv2art(item.pv);
+    } else {
+      // fallback: leggi partVendita dal codice e aggiungi 99 centesimi
+      const pvCents = parseInt(item.codice.slice(-4)) || 0;
+      item.artDisplay = String(pvCents + 99).padStart(4,'0');
+    }
+    apriModal(item);
+  } catch(e) {}
+}
+
+function caricaStoricoLocale() {
+  try {
+    const s = JSON.parse(localStorage.getItem('lusa_storico')||'[]');
+    renderStorico(s.map(i=>({...i,data:new Date(i.ts).toLocaleDateString('it-IT'),ora:new Date(i.ts).toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'})})));
+  } catch(e) { document.getElementById('storico-list').innerHTML='<div class="empty-state">Storico non disponibile</div>'; }
+}
+
+function salvaLocale(label) {
+  try {
+    const s = JSON.parse(localStorage.getItem('lusa_storico')||'[]');
+    s.unshift({...label,foto:null});
+    if (s.length>30) s.pop();
+    localStorage.setItem('lusa_storico',JSON.stringify(s));
+  } catch(e) {}
+}
+
+// ─── FOTO ────────────────────────────────────────────────
+function caricaFoto(input) {
+  const file = input.files[0]; if (!file) return;
+  const img = new Image();
+  img.onload = () => {
+    const c=document.createElement('canvas'),MAX=800;
+    let w=img.width,h=img.height;
+    if(w>h){if(w>MAX){h=h*MAX/w;w=MAX;}}else{if(h>MAX){w=w*MAX/h;h=MAX;}}
+    c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h);
+    fotoBase64=c.toDataURL('image/jpeg',.75);
+    document.getElementById('foto-preview').src=fotoBase64;
+    document.getElementById('foto-preview').style.display='block';
+    document.getElementById('btn-rimuovi').style.display='block';
+  };
+  img.src=URL.createObjectURL(file);
+}
+
+function rimuoviFoto() {
+  fotoBase64=null;
+  document.getElementById('foto-preview').style.display='none';
+  document.getElementById('foto-preview').src='';
+  document.getElementById('btn-rimuovi').style.display='none';
+  document.getElementById('input-camera').value='';
+  document.getElementById('input-gallery').value='';
+}
+
+// ─── MODAL ───────────────────────────────────────────────
+function apriModal(label) { currentLabel=label; document.getElementById('modal').classList.add('open'); renderPreview(); }
+function chiudiModal(e) { if(!e||e.target===document.getElementById('modal')) document.getElementById('modal').classList.remove('open'); }
+
+function renderPreview() {
+  const wrap=document.getElementById('preview-wrap');
+  wrap.innerHTML='';
+  const el=buildLabel(currentLabel);
+  wrap.appendChild(el);
+  JsBarcode(el.querySelector('svg.bc'),currentLabel.codice,{format:'CODE128',displayValue:false,margin:0,background:'#fff',lineColor:'#000'});
+}
+
+// ─── ETICHETTA 5x3cm ─────────────────────────────────────
+// W=189px H=113px (96dpi) — proporzione esatta 5:3
+// Layout: Art(sopra) | Barcode(centro, flex:1) | Codice(sotto, font massimo)
+function buildLabel(label) {
+  const W=189, H=113, PAD=4, IW=W-PAD*2;
+
+  // Art: usa artDisplay (= pv + 0,99 in centesimi)
+  const artStr = 'Art : ' + label.artDisplay;
+
+  // Codice: font massimo che entra su una riga in Courier New
+  // Courier New monospace: larghezza char ≈ 0.601 × fontSize
+  const codeStr  = label.codice;
+  const artH     = 17;
+  const codeH    = 15;
+  const barcodeH = H - PAD*2 - artH - codeH - 2;
+  const codeFont = Math.min( Math.floor(IW / (codeStr.length * 0.601)), codeH );
+
+  const div=document.createElement('div');
+  div.style.cssText=[
+    `width:${W}px`,`height:${H}px`,`padding:${PAD}px`,
+    'background:#fff','border:1.5px solid #888',
+    'display:flex','flex-direction:column','align-items:stretch',
+    'overflow:hidden','box-sizing:border-box',
+    'box-shadow:0 2px 10px rgba(0,0,0,0.18)'
+  ].join(';');
+
+  div.innerHTML=
+    `<div style="height:${artH}px;display:flex;align-items:center;font-family:'Courier New',monospace;font-weight:900;font-size:13px;color:#000;white-space:nowrap;overflow:hidden;flex-shrink:0;">${artStr}</div>`+
+    `<div style="flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;">`+
+      `<svg class="bc" style="width:${IW}px;height:${barcodeH}px;display:block;"></svg>`+
+    `</div>`+
+    `<div style="height:${codeH}px;display:flex;align-items:center;justify-content:center;font-family:'Courier New',monospace;font-weight:900;font-size:${codeFont}px;color:#000;letter-spacing:1px;white-space:nowrap;overflow:hidden;flex-shrink:0;">${codeStr}</div>`;
+  return div;
+}
+
+// ─── STAMPA 5x3cm @203dpi ────────────────────────────────
+function stampa() {
+  const printArea=document.getElementById('print-area');
+  printArea.innerHTML='';
+
+  const CM=203/2.54, W=Math.round(5*CM), H=Math.round(3*CM), PAD=8, IW=W-PAD*2;
+  const artStr='Art : '+currentLabel.artDisplay;
+  const codeStr=currentLabel.codice;
+  const artH=Math.round(H*0.155);
+  const codeH=Math.round(H*0.13);
+  const barcodeH=H-PAD*2-artH-codeH-4;
+  const artFont=Math.round(artH*0.78);
+  const codeFont=Math.min(Math.floor(IW/(codeStr.length*0.601)),codeH);
+
+  const div=document.createElement('div');
+  div.style.cssText=[
+    `width:${W}px`,`height:${H}px`,`padding:${PAD}px`,
+    'background:#fff','display:flex','flex-direction:column',
+    'align-items:stretch','overflow:hidden','box-sizing:border-box'
+  ].join(';');
+
+  div.innerHTML=
+    `<div style="height:${artH}px;display:flex;align-items:center;font-family:'Courier New',monospace;font-weight:900;font-size:${artFont}px;color:#000;white-space:nowrap;overflow:hidden;flex-shrink:0;">${artStr}</div>`+
+    `<div style="flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;">`+
+      `<svg class="bc" style="width:${IW}px;height:${barcodeH}px;display:block;"></svg>`+
+    `</div>`+
+    `<div style="height:${codeH}px;display:flex;align-items:center;justify-content:center;font-family:'Courier New',monospace;font-weight:900;font-size:${codeFont}px;color:#000;letter-spacing:2px;white-space:nowrap;overflow:hidden;flex-shrink:0;">${codeStr}</div>`;
+
+  printArea.appendChild(div);
+  JsBarcode(div.querySelector('svg.bc'),codeStr,{format:'CODE128',displayValue:false,margin:0,background:'#fff',lineColor:'#000'});
+
+  let s=document.getElementById('pps');
+  if(!s){s=document.createElement('style');s.id='pps';document.head.appendChild(s);}
+  s.textContent='@media print{@page{size:5cm 3cm;margin:0}}';
+  setTimeout(()=>window.print(),150);
+}
+
+// ─── BANNER ──────────────────────────────────────────────
+function showBanner(t,m){const b=document.getElementById('banner');b.className='banner '+t;b.textContent=m;}
+function hideBanner(){document.getElementById('banner').className='banner';}
+</script>
+</body>
+</html>
