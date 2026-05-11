@@ -568,177 +568,183 @@ function buildLabel(label) {
 }
 
 // ─── PDF ENGINE ─────────────────────────────────────────
-// Tutto via jsPDF — niente window.print(), niente nuove finestre.
-// generaPDF(formato) accetta: '5x3' | '5x2.5' | 'A6'
+// Strategia: barcode generato come SVG puro → inserito in jsPDF
+// via svg2pdf o come immagine PNG ad altissima risoluzione su canvas
+// dedicato solo al barcode (niente scaling da jsPDF).
+
+// Genera canvas del SOLO barcode ad alta risoluzione
+function barcodeToCanvas(codeStr, widthPx, heightPx) {
+  const c = document.createElement('canvas');
+  // Moltiplica per devicePixelRatio per retina + scala extra
+  const scale = Math.max(window.devicePixelRatio || 1, 2) * 3;
+  c.width  = widthPx  * scale;
+  c.height = heightPx * scale;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, c.width, c.height);
+  // Crea SVG e disegna su canvas
+  const svgEl = document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svgEl.setAttribute('width',  c.width);
+  svgEl.setAttribute('height', c.height);
+  JsBarcode(svgEl, codeStr, {
+    format: 'CODE128', displayValue: false,
+    margin: 0, background: '#ffffff', lineColor: '#000000',
+    width: scale * 2, height: c.height
+  });
+  const svgStr  = new XMLSerializer().serializeToString(svgEl);
+  const svgBlob = new Blob([svgStr], {type:'image/svg+xml;charset=utf-8'});
+  const url     = URL.createObjectURL(svgBlob);
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0);
+      URL.revokeObjectURL(url);
+      res(c);
+    };
+    img.onerror = rej;
+    img.src = url;
+  });
+}
 
 async function generaPDF(formato) {
   const label   = currentLabel;
   const artStr  = 'Art : ' + label.artDisplay;
   const codeStr = label.codice;
+  const { jsPDF } = window.jspdf;
 
-  // Genera barcode SVG → PNG su canvas
-  async function barcodeCanvas(w, h) {
-    const svgEl = document.createElementNS('http://www.w3.org/2000/svg','svg');
-    JsBarcode(svgEl, codeStr, {format:'CODE128',displayValue:false,margin:0,background:'#fff',lineColor:'#000'});
-    const svgData = new XMLSerializer().serializeToString(svgEl);
-    const blob    = new Blob([svgData],{type:'image/svg+xml;charset=utf-8'});
-    const url     = URL.createObjectURL(blob);
-    return new Promise((res,rej)=>{
-      const img = new Image();
-      img.onload = ()=>{ URL.revokeObjectURL(url); res(img); };
-      img.onerror = rej;
-      img.src = url;
+  // ── ETICHETTA 5x3 o 5x2.5 ────────────────────────────
+  if (formato === '5x3' || formato === '5x2.5') {
+    const LW_cm = 5.0;
+    const LH_cm = formato === '5x3' ? 3.0 : 2.5;
+    // Lavoriamo in mm per jsPDF
+    const LW = LW_cm * 10; // 50mm
+    const LH = LH_cm * 10; // 30mm o 25mm
+    const PAD = 1.2; // mm padding
+
+    const doc = new jsPDF({
+      orientation: LW > LH ? 'landscape' : 'portrait',
+      unit: 'mm',
+      format: [LW_cm, LH_cm]  // jsPDF accetta cm? no, usa mm
     });
+    // jsPDF format in mm
+    const doc2 = new jsPDF({
+      orientation: 'landscape',
+      unit: 'mm',
+      format: [LW, LH]
+    });
+
+    // Art : XXXX — in alto a sinistra
+    doc2.setFont('courier', 'bold');
+    const artFontMm = LH * 0.13; // ~3.9mm su 30mm
+    doc2.setFontSize(artFontMm * 2.835); // mm → pt (1mm = 2.835pt)
+    doc2.setTextColor(0, 0, 0);
+    doc2.text(artStr, PAD, PAD + artFontMm * 0.8);
+    const artRowH = artFontMm * 1.4;
+
+    // Codice — in basso centrato, font MASSIMO che entra
+    const codeFontMm = Math.min(
+      (LW - PAD*2) / (codeStr.length * 0.52), // larghezza disponibile
+      LH * 0.095                               // max ~2.8mm
+    );
+    doc2.setFontSize(codeFontMm * 2.835);
+    const codeRowH = codeFontMm * 1.4;
+    doc2.text(codeStr, LW / 2, LH - PAD, { align: 'center' });
+
+    // Barcode — occupa lo spazio centrale
+    const bcX = PAD;
+    const bcY = PAD + artRowH + 0.5;
+    const bcW = LW - PAD * 2;
+    const bcH = LH - bcY - codeRowH - PAD - 0.5;
+
+    // Genera barcode canvas ad alta risoluzione
+    const bcCanvas = await barcodeToCanvas(codeStr, 500, 200);
+    const bcData   = bcCanvas.toDataURL('image/png');
+    doc2.addImage(bcData, 'PNG', bcX, bcY, bcW, bcH, undefined, 'FAST');
+
+    const nomeFile = codeStr + '_etichetta_' + formato.replace('.','p') + '.pdf';
+    doc2.save(nomeFile);
+    return;
   }
 
-  // Carica foto prodotto se presente
-  async function fotoImg() {
-    if (!label.foto) return null;
-    return new Promise(res=>{
+  // ── SCHEDA A6 (foto + barcode) ────────────────────────
+  // A6 = 105 x 148mm portrait
+  const LW = 105, LH = 148;
+  const PAD = 4; // mm
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a6'
+  });
+
+  let curY = PAD;
+
+  // Foto prodotto — grande, senza testo sopra
+  if (label.foto) {
+    const foto = await new Promise(res => {
       const img = new Image();
       img.crossOrigin = 'anonymous';
-      img.onload  = ()=>res(img);
-      img.onerror = ()=>res(null);
+      img.onload  = () => res(img);
+      img.onerror = () => res(null);
       img.src = label.foto;
     });
-  }
 
-  const { jsPDF } = window.jspdf;
-  let doc, canvas, ctx;
-
-  if (formato === '5x3' || formato === '5x2.5') {
-    // ── ETICHETTA PICCOLA ─────────────────────────────────
-    const LW = 5.0;
-    const LH = formato === '5x3' ? 3.0 : 2.5;
-
-    // Disegna su canvas ad alta risoluzione (300dpi)
-    const DPI = 300 / 2.54;
-    const CW  = Math.round(LW * DPI);
-    const CH  = Math.round(LH * DPI);
-    const PAD = Math.round(1   * DPI / 10); // 1mm
-
-    canvas = document.createElement('canvas');
-    canvas.width = CW; canvas.height = CH;
-    ctx = canvas.getContext('2d');
-
-    // Sfondo bianco
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0,0,CW,CH);
-
-    // Art
-    const artFontPx = Math.round(3.6 * DPI / 25.4);
-    ctx.fillStyle = '#000';
-    ctx.font = `900 ${artFontPx}px "Courier New",monospace`;
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    ctx.fillText(artStr, PAD, PAD);
-    const artH = Math.round(artFontPx * 1.35);
-
-    // Codice (bottom)
-    const IW = CW - PAD*2;
-    const codeMaxFont = Math.floor(IW / (codeStr.length * 0.601));
-    const codeFontPx  = Math.min(codeMaxFont, Math.round(2.8 * DPI / 25.4));
-    ctx.font = `900 ${codeFontPx}px "Courier New",monospace`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'bottom';
-    ctx.fillText(codeStr, CW/2, CH - PAD);
-    const codeH = Math.round(codeFontPx * 1.35);
-
-    // Barcode al centro
-    const bcY = PAD + artH + 2;
-    const bcH = CH - bcY - codeH - PAD - 2;
-    const bcImg = await barcodeCanvas(IW, bcH);
-    ctx.drawImage(bcImg, PAD, bcY, IW, bcH);
-
-    // PDF
-    doc = new jsPDF({ orientation:'landscape', unit:'cm', format:[LW,LH] });
-    doc.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, LW, LH);
-
-  } else {
-    // ── SCHEDA A6 (foto + barcode) ────────────────────────
-    // A6 = 10.5 × 14.8 cm, portrait
-    const LW = 10.5, LH = 14.8;
-    const DPI = 200 / 2.54;
-    const CW  = Math.round(LW * DPI);
-    const CH  = Math.round(LH * DPI);
-    const PAD = Math.round(4  * DPI / 25.4); // 4mm padding
-
-    canvas = document.createElement('canvas');
-    canvas.width = CW; canvas.height = CH;
-    ctx = canvas.getContext('2d');
-
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0,0,CW,CH);
-
-    let curY = PAD;
-
-    // Foto prodotto (se disponibile)
-    const foto = await fotoImg();
-    const fotoH = Math.round(CH * 0.50);
     if (foto) {
-      const scale = Math.max(CW / foto.width, fotoH / foto.height);
-      const sw = CW/scale, sh = fotoH/scale;
+      const fotoH = Math.round(LH * 0.58); // 58% altezza — foto grande
+      const fotoW = LW - PAD * 2;
+
+      // Canvas per crop centrato
+      const c = document.createElement('canvas');
+      const scale = 2;
+      c.width  = fotoW  * scale * (96/25.4); // px
+      c.height = fotoH  * scale * (96/25.4);
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0,0,c.width,c.height);
+      const sc = Math.max(c.width/foto.width, c.height/foto.height);
+      const sw = c.width/sc, sh = c.height/sc;
       const sx = (foto.width-sw)/2, sy = (foto.height-sh)/2;
-      ctx.drawImage(foto, sx, sy, sw, sh, 0, 0, CW, fotoH);
-      curY = fotoH + PAD;
+      ctx.drawImage(foto, sx, sy, sw, sh, 0, 0, c.width, c.height);
+
+      doc.addImage(c.toDataURL('image/jpeg',0.92), 'JPEG', PAD, curY, fotoW, fotoH, undefined, 'MEDIUM');
+      curY += fotoH + 2;
+
       // Linea separatrice
-      ctx.strokeStyle = '#e0e0e0';
-      ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(0,fotoH); ctx.lineTo(CW,fotoH); ctx.stroke();
+      doc.setDrawColor(220,220,220);
+      doc.setLineWidth(0.3);
+      doc.line(PAD, curY, LW-PAD, curY);
+      curY += 2;
     }
-
-    // Logo
-    ctx.fillStyle = '#1D3557';
-    ctx.font = `bold ${Math.round(5.5*DPI/25.4)}px "Courier New",monospace`;
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    ctx.fillText('LU.SA. SRL', PAD, curY);
-    curY += Math.round(7*DPI/25.4);
-
-    // Art
-    ctx.fillStyle = '#000';
-    ctx.font = `900 ${Math.round(8*DPI/25.4)}px "Courier New",monospace`;
-    ctx.fillText(artStr, PAD, curY);
-    curY += Math.round(11*DPI/25.4);
-
-    // Barcode
-    const IW   = CW - PAD*2;
-    const bcH  = Math.round(18*DPI/25.4);
-    const bcImg = await barcodeCanvas(IW, bcH);
-    ctx.drawImage(bcImg, PAD, curY, IW, bcH);
-    curY += bcH + Math.round(2*DPI/25.4);
-
-    // Codice testo
-    const codeMaxFont = Math.floor(IW / (codeStr.length * 0.601));
-    const codeFontPx  = Math.min(codeMaxFont, Math.round(5*DPI/25.4));
-    ctx.font = `900 ${codeFontPx}px "Courier New",monospace`;
-    ctx.textAlign = 'center';
-    ctx.fillText(codeStr, CW/2, curY);
-    curY += Math.round(8*DPI/25.4);
-
-    // Prezzo
-    const pvEur = parseFloat(label.pv).toFixed(2).replace('.',',') + ' €';
-    ctx.font = `bold ${Math.round(10*DPI/25.4)}px -apple-system,sans-serif`;
-    ctx.fillStyle = '#1D3557';
-    ctx.textAlign = 'right';
-    ctx.fillText(pvEur, CW-PAD, curY);
-
-    // Bordo
-    ctx.strokeStyle = '#1D3557';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(2,2,CW-4,CH-4);
-
-    doc = new jsPDF({ orientation:'portrait', unit:'cm', format:'a6' });
-    doc.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, LW, LH);
   }
 
-  // Scarica il PDF — su iPhone Safari lo apre nel viewer interno
-  const nomeFile = codeStr + (formato==='A6'?'_scheda':'_etichetta_'+formato.replace('.','p')) + '.pdf';
+  // Art
+  const artFontMm = 5.5;
+  doc.setFont('courier','bold');
+  doc.setFontSize(artFontMm * 2.835);
+  doc.setTextColor(0,0,0);
+  doc.text(artStr, PAD, curY + artFontMm * 0.85);
+  curY += artFontMm * 1.5;
+
+  // Barcode — stretto e centrato
+  const bcW  = LW - PAD * 2;
+  const bcH  = 16; // mm — compatto
+  const bcCanvas = await barcodeToCanvas(codeStr, 700, 120);
+  doc.addImage(bcCanvas.toDataURL('image/png'), 'PNG', PAD, curY, bcW, bcH, undefined, 'FAST');
+  curY += bcH + 1.5;
+
+  // Codice sotto barcode — font massimo
+  const codeFontMm = Math.min(
+    (LW - PAD*2) / (codeStr.length * 0.52),
+    4.5
+  );
+  doc.setFontSize(codeFontMm * 2.835);
+  doc.text(codeStr, LW/2, curY + codeFontMm * 0.85, { align: 'center' });
+
+  const nomeFile = codeStr + '_scheda.pdf';
   doc.save(nomeFile);
 }
 
-// Alias per compatibilità con vecchio bottone
-function stampa() { generaPDF(currentLabel._formato||'5x3'); }
+function stampa()         { generaPDF(currentLabel._formato || '5x3'); }
 function schedaProdotto() { generaPDF('A6'); }
 
 // ─── BANNER ──────────────────────────────────────────────
