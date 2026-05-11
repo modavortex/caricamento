@@ -74,9 +74,17 @@
   .btn-stampa-modal:active{opacity:.8}
   .btn-close-modal{background:var(--bg);color:var(--text);border:.5px solid var(--border);border-radius:var(--radius);font-size:15px;font-weight:600;padding:15px 20px;cursor:pointer;font-family:inherit;-webkit-tap-highlight-color:transparent}
   @media print{
-    @page{margin:0}
+    @page{size:5cm 3cm;margin:0mm}
     body>*:not(#print-area){display:none!important}
-    #print-area{display:flex!important;position:fixed;inset:0;align-items:center;justify-content:center;background:white}
+    #print-area{
+      display:block!important;
+      position:fixed;top:0;left:0;
+      width:5cm;height:3cm;
+      background:white;
+      overflow:hidden;
+    }
+    #print-area.formato-5x25{height:2.5cm;}
+    #print-area.formato-5x25 ~ * {display:none!important}
   }
   #print-area{display:none}
 </style>
@@ -490,101 +498,69 @@ function buildLabel(label) {
   return div;
 }
 
-// ─── STAMPA — dimensioni in CM reali per Safari/iPhone ───
-// Safari ignora @page size ma rispetta width/height in cm nel DOM.
-// Usiamo una finestra di stampa separata con tutto inline in cm.
+// ─── STAMPA — tutto inline, nessuna nuova finestra ──────
+// Safari iPhone: window.open() rompe la navigazione.
+// Soluzione: inietta l'etichetta nel #print-area, poi window.print().
+// @media print nasconde tutto il resto. Dopo la stampa ripulisce.
 function stampa() {
-  const LW = '5cm';
-  const LH = currentLabel._formato === '5x2.5' ? '2.5cm' : '3cm';
+  const fmt = (currentLabel._formato === '5x2.5') ? '5x2.5' : '5x3';
+  const LH  = fmt === '5x2.5' ? '2.5cm' : '3cm';
+
   const artStr  = 'Art : ' + currentLabel.artDisplay;
   const codeStr = currentLabel.codice;
 
-  // Genera SVG barcode come stringa
+  // Genera SVG barcode
   const svgEl = document.createElementNS('http://www.w3.org/2000/svg','svg');
   JsBarcode(svgEl, codeStr, {format:'CODE128',displayValue:false,margin:0,background:'#fff',lineColor:'#000'});
-  const svgStr = svgEl.outerHTML;
 
-  const html = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width">
-<style>
-  * { margin:0; padding:0; box-sizing:border-box; }
-  html, body { width:${LW}; height:${LH}; background:#fff; }
-  @page { size:${LW} ${LH}; margin:0; }
-  .label {
-    width:${LW};
-    height:${LH};
-    padding:1mm;
-    display:flex;
-    flex-direction:column;
-    align-items:stretch;
-    overflow:hidden;
-    background:#fff;
-  }
-  .art {
-    font-family:'Courier New',Courier,monospace;
-    font-weight:900;
-    font-size:3.8mm;
-    color:#000;
-    white-space:nowrap;
-    line-height:1.1;
-    flex-shrink:0;
-  }
-  .barcode-wrap {
-    flex:1;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    overflow:hidden;
-  }
-  .barcode-wrap svg {
-    width:100%;
-    height:100%;
-    display:block;
-  }
-  .code {
-    font-family:'Courier New',Courier,monospace;
-    font-weight:900;
-    font-size:2.4mm;
-    color:#000;
-    text-align:center;
-    white-space:nowrap;
-    letter-spacing:0.15mm;
-    line-height:1.1;
-    flex-shrink:0;
-  }
-</style>
-</head>
-<body>
-<div class="label">
-  <div class="art">${artStr}</div>
-  <div class="barcode-wrap">${svgStr}</div>
-  <div class="code">${codeStr}</div>
-</div>
-<script>window.onload=function(){window.print();window.onafterprint=function(){window.close();};};<\/script>
-</body>
-</html>`;
+  const printArea = document.getElementById('print-area');
+  printArea.innerHTML = '';
+  printArea.className = fmt === '5x2.5' ? 'formato-5x25' : '';
 
-  const win = window.open('','_blank','width=300,height=200');
-  if (!win) {
-    // Popup bloccato — fallback stampa inline
-    const printArea = document.getElementById('print-area');
-    printArea.innerHTML = '';
-    const iframe = document.createElement('iframe');
-    iframe.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;border:none;';
-    document.body.appendChild(iframe);
-    iframe.contentDocument.open();
-    iframe.contentDocument.write(html);
-    iframe.contentDocument.close();
-    iframe.contentWindow.focus();
-    setTimeout(()=>{ iframe.contentWindow.print(); setTimeout(()=>iframe.remove(),1000); },400);
-    return;
-  }
-  win.document.open();
-  win.document.write(html);
-  win.document.close();
+  // Etichetta con misure in mm/cm — il browser le rispetta in stampa
+  const wrap = document.createElement('div');
+  wrap.style.cssText = [
+    'width:5cm', `height:${LH}`,
+    'padding:1mm',
+    'background:#fff',
+    'display:flex',
+    'flex-direction:column',
+    'align-items:stretch',
+    'overflow:hidden',
+    'box-sizing:border-box'
+  ].join(';');
+
+  const artDiv = document.createElement('div');
+  artDiv.style.cssText = "font-family:'Courier New',Courier,monospace;font-weight:900;font-size:3.5mm;color:#000;white-space:nowrap;line-height:1.2;flex-shrink:0;";
+  artDiv.textContent = artStr;
+
+  const bcWrap = document.createElement('div');
+  bcWrap.style.cssText = 'flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;min-height:0;';
+  svgEl.style.cssText = 'width:100%;height:100%;display:block;';
+  bcWrap.appendChild(svgEl);
+
+  const codeDiv = document.createElement('div');
+  codeDiv.style.cssText = "font-family:'Courier New',Courier,monospace;font-weight:900;font-size:2.2mm;color:#000;text-align:center;white-space:nowrap;letter-spacing:0.1mm;line-height:1.2;flex-shrink:0;";
+  codeDiv.textContent = codeStr;
+
+  wrap.appendChild(artDiv);
+  wrap.appendChild(bcWrap);
+  wrap.appendChild(codeDiv);
+  printArea.appendChild(wrap);
+
+  // Aggiorna @page size dinamicamente
+  let pps = document.getElementById('pps');
+  if (!pps) { pps=document.createElement('style'); pps.id='pps'; document.head.appendChild(pps); }
+  pps.textContent = `@media print{@page{size:5cm ${LH};margin:0mm}}`;
+
+  // Breve delay per assicurarsi che il DOM sia pronto, poi stampa
+  requestAnimationFrame(()=>{
+    requestAnimationFrame(()=>{
+      window.print();
+      // Dopo la stampa ripulisce e torna alla pagina normalmente
+      setTimeout(()=>{ printArea.innerHTML=''; printArea.className=''; }, 500);
+    });
+  });
 }
 
 // ─── BANNER ──────────────────────────────────────────────
