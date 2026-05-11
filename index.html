@@ -385,9 +385,13 @@ async function salvaEtichetta(label) {
 
 async function caricaFotoDrive(base64, codice, row) {
   try {
-    // Comprimi la foto a max 400px e qualità 0.5 per passarla via JSONP
-    // (JSONP = GET request, limite URL ~8000 chars)
-    const compressed = await comprimiFoto(base64, 400, 0.50);
+    showBanner('warn', '⏳ Comprimo foto...');
+    const compressed = await comprimiFoto(base64, 300, 0.40);
+    const sizeKB = Math.round(compressed.length * 0.75 / 1024);
+    showBanner('warn', '⏳ Invio foto (' + sizeKB + 'KB) a Drive...');
+    console.log('[FOTO] base64 length:', compressed.length, 'sizeKB:', sizeKB);
+    console.log('[FOTO] codice:', codice, 'row:', row);
+    console.log('[FOTO] prefisso:', compressed.substring(0,40));
 
     const r = await apiCall({
       action:  'uploadFoto',
@@ -396,16 +400,20 @@ async function caricaFotoDrive(base64, codice, row) {
       row:     row
     });
 
+    console.log('[FOTO] risposta Apps Script:', JSON.stringify(r));
+
     if (r.ok) {
-      showBanner('ok', '✓ Foto salvata su Drive');
-      setTimeout(hideBanner, 3000);
-    } else {
-      showBanner('warn', '⚠️ Etichetta ok, foto non caricata: ' + (r.error||''));
+      showBanner('ok', '✓ Foto su Drive: ' + (r.fileName||''));
       setTimeout(hideBanner, 4000);
+    } else {
+      showBanner('warn', '⚠️ Foto non caricata: ' + (r.error||'errore sconosciuto'));
+      console.error('[FOTO] errore:', r.error);
+      setTimeout(hideBanner, 6000);
     }
   } catch(e) {
-    showBanner('warn', '⚠️ Etichetta salvata. Foto non caricata (offline).');
-    setTimeout(hideBanner, 4000);
+    showBanner('warn', '⚠️ Foto non caricata: ' + e.message);
+    console.error('[FOTO] eccezione:', e);
+    setTimeout(hideBanner, 6000);
   }
 }
 
@@ -568,42 +576,55 @@ function buildLabel(label) {
 }
 
 // ─── PDF ENGINE ─────────────────────────────────────────
-// Strategia: barcode generato come SVG puro → inserito in jsPDF
-// via svg2pdf o come immagine PNG ad altissima risoluzione su canvas
-// dedicato solo al barcode (niente scaling da jsPDF).
+// Barcode: canvas dedicato ad altissima risoluzione (6x scale)
+// Layout in mm con jsPDF — formato 5x3 e 5x2.5 sono DIVERSI
+// Codice testo: font calcolato per occupare TUTTA la larghezza
 
-// Genera canvas del SOLO barcode ad alta risoluzione
-function barcodeToCanvas(codeStr, widthPx, heightPx) {
-  const c = document.createElement('canvas');
-  // Moltiplica per devicePixelRatio per retina + scala extra
-  const scale = Math.max(window.devicePixelRatio || 1, 2) * 3;
-  c.width  = widthPx  * scale;
-  c.height = heightPx * scale;
-  const ctx = c.getContext('2d');
+// Crea canvas barcode ad alta risoluzione
+async function barcodeCanvas(codeStr, targetW_mm, targetH_mm) {
+  // 600dpi effettivi
+  const DPI   = 600;
+  const MMPI  = DPI / 25.4;
+  const cw    = Math.round(targetW_mm * MMPI);
+  const ch    = Math.round(targetH_mm * MMPI);
+  const c     = document.createElement('canvas');
+  c.width     = cw;
+  c.height    = ch;
+  const ctx   = c.getContext('2d');
   ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, c.width, c.height);
-  // Crea SVG e disegna su canvas
+  ctx.fillRect(0, 0, cw, ch);
+
   const svgEl = document.createElementNS('http://www.w3.org/2000/svg','svg');
-  svgEl.setAttribute('width',  c.width);
-  svgEl.setAttribute('height', c.height);
+  svgEl.setAttribute('width', cw);
+  svgEl.setAttribute('height', ch);
   JsBarcode(svgEl, codeStr, {
-    format: 'CODE128', displayValue: false,
-    margin: 0, background: '#ffffff', lineColor: '#000000',
-    width: scale * 2, height: c.height
+    format:'CODE128', displayValue:false,
+    margin:0, background:'#ffffff', lineColor:'#000000',
+    width: Math.max(2, Math.floor(cw / 120)),
+    height: ch
   });
+
   const svgStr  = new XMLSerializer().serializeToString(svgEl);
-  const svgBlob = new Blob([svgStr], {type:'image/svg+xml;charset=utf-8'});
-  const url     = URL.createObjectURL(svgBlob);
-  return new Promise((res, rej) => {
+  const blob    = new Blob([svgStr],{type:'image/svg+xml;charset=utf-8'});
+  const url     = URL.createObjectURL(blob);
+
+  return new Promise((res,rej) => {
     const img = new Image();
-    img.onload = () => {
-      ctx.drawImage(img, 0, 0);
-      URL.revokeObjectURL(url);
-      res(c);
-    };
+    img.onload = () => { ctx.drawImage(img,0,0,cw,ch); URL.revokeObjectURL(url); res(c); };
     img.onerror = rej;
     img.src = url;
   });
+}
+
+// Calcola font size in pt affinché il testo occupi esattamente maxW_mm
+// Courier New monospace: larghezza char = 0.6 * fontSize (in stessa unità)
+function fontPtPerLarghezza(testo, maxW_mm) {
+  // In jsPDF unità mm: 1pt = 0.3528mm → fontSize_mm = fontSize_pt * 0.3528
+  // larghezza testo = nChars * 0.6 * fontSize_mm
+  // maxW_mm = nChars * 0.6 * fontSize_pt * 0.3528
+  // fontSize_pt = maxW_mm / (nChars * 0.6 * 0.3528)
+  const pt = maxW_mm / (testo.length * 0.6 * 0.3528);
+  return Math.floor(pt);
 }
 
 async function generaPDF(formato) {
@@ -612,76 +633,66 @@ async function generaPDF(formato) {
   const codeStr = label.codice;
   const { jsPDF } = window.jspdf;
 
-  // ── ETICHETTA 5x3 o 5x2.5 ────────────────────────────
+  // ── ETICHETTA PICCOLA 5x3 o 5x2.5 ───────────────────────────────
   if (formato === '5x3' || formato === '5x2.5') {
-    const LW_cm = 5.0;
-    const LH_cm = formato === '5x3' ? 3.0 : 2.5;
-    // Lavoriamo in mm per jsPDF
-    const LW = LW_cm * 10; // 50mm
-    const LH = LH_cm * 10; // 30mm o 25mm
-    const PAD = 1.2; // mm padding
+    // Dimensioni DIVERSE — 5x3 ≠ 5x2.5
+    const W = 50;  // mm larghezza sempre 50mm (5cm)
+    const H = formato === '5x3' ? 30 : 25;  // mm altezza: 30mm o 25mm
 
+    // jsPDF: format array = [width, height] in unità scelta
     const doc = new jsPDF({
-      orientation: LW > LH ? 'landscape' : 'portrait',
+      orientation: W > H ? 'landscape' : 'portrait',
       unit: 'mm',
-      format: [LW_cm, LH_cm]  // jsPDF accetta cm? no, usa mm
-    });
-    // jsPDF format in mm
-    const doc2 = new jsPDF({
-      orientation: 'landscape',
-      unit: 'mm',
-      format: [LW, LH]
+      format: [W, H]
     });
 
-    // Art : XXXX — in alto a sinistra
-    doc2.setFont('courier', 'bold');
-    const artFontMm = LH * 0.13; // ~3.9mm su 30mm
-    doc2.setFontSize(artFontMm * 2.835); // mm → pt (1mm = 2.835pt)
-    doc2.setTextColor(0, 0, 0);
-    doc2.text(artStr, PAD, PAD + artFontMm * 0.8);
-    const artRowH = artFontMm * 1.4;
+    const PAD = 1.0; // mm
+    const IW  = W - PAD * 2; // larghezza interna
 
-    // Codice — in basso centrato, font MASSIMO che entra
-    const codeFontMm = Math.min(
-      (LW - PAD*2) / (codeStr.length * 0.52), // larghezza disponibile
-      LH * 0.095                               // max ~2.8mm
-    );
-    doc2.setFontSize(codeFontMm * 2.835);
-    const codeRowH = codeFontMm * 1.4;
-    doc2.text(codeStr, LW / 2, LH - PAD, { align: 'center' });
+    // ── ART (in alto) ──
+    // Font: occupa ~13% dell'altezza
+    const artPt = Math.floor(H * 0.13 / 0.3528);
+    doc.setFont('courier','bold');
+    doc.setFontSize(artPt);
+    doc.setTextColor(0,0,0);
+    const artH_mm = H * 0.13;
+    doc.text(artStr, PAD, PAD + artH_mm * 0.85);
 
-    // Barcode — occupa lo spazio centrale
-    const bcX = PAD;
-    const bcY = PAD + artRowH + 0.5;
-    const bcW = LW - PAD * 2;
-    const bcH = LH - bcY - codeRowH - PAD - 0.5;
+    // ── CODICE (in basso) — TUTTA LA LARGHEZZA ──
+    // Calcola font pt affinché il codice occupi tutta IW
+    const codePtMax = fontPtPerLarghezza(codeStr, IW);
+    // Limita a max 13% dell'altezza per non essere troppo alto
+    const codePtLim = Math.floor(H * 0.13 / 0.3528);
+    const codePt    = Math.min(codePtMax, codePtLim);
+    const codeH_mm  = codePt * 0.3528 * 1.2;
+    doc.setFontSize(codePt);
+    doc.text(codeStr, W/2, H - PAD, { align:'center', baseline:'bottom' });
 
-    // Genera barcode canvas ad alta risoluzione
-    const bcCanvas = await barcodeToCanvas(codeStr, 500, 200);
-    const bcData   = bcCanvas.toDataURL('image/png');
-    doc2.addImage(bcData, 'PNG', bcX, bcY, bcW, bcH, undefined, 'FAST');
+    // ── BARCODE (centro, occupa tutto lo spazio rimasto) ──
+    const bcY = PAD + artH_mm + 0.5;
+    const bcH = H - bcY - codeH_mm - PAD - 0.5;
+    const bcW = IW;
 
-    const nomeFile = codeStr + '_etichetta_' + formato.replace('.','p') + '.pdf';
-    doc2.save(nomeFile);
+    const bcC  = await barcodeCanvas(codeStr, bcW, bcH);
+    doc.addImage(bcC.toDataURL('image/png'), 'PNG', PAD, bcY, bcW, bcH, '', 'FAST');
+
+    doc.save(codeStr + '_' + formato.replace('.','p') + 'cm.pdf');
     return;
   }
 
-  // ── SCHEDA A6 (foto + barcode) ────────────────────────
-  // A6 = 105 x 148mm portrait
-  const LW = 105, LH = 148;
-  const PAD = 4; // mm
+  // ── SCHEDA A6 105x148mm portrait ────────────────────────────────
+  const W = 105, H = 148;
+  const PAD = 4;
+  const IW  = W - PAD * 2;
 
-  const doc = new jsPDF({
-    orientation: 'portrait',
-    unit: 'mm',
-    format: 'a6'
-  });
+  const doc = new jsPDF({orientation:'portrait', unit:'mm', format:'a6'});
 
   let curY = PAD;
 
-  // Foto prodotto — grande, senza testo sopra
+  // FOTO — grande (60% altezza), senza altri elementi sopra
   if (label.foto) {
-    const foto = await new Promise(res => {
+    const fotoH = Math.round(H * 0.60);
+    const foto  = await new Promise(res => {
       const img = new Image();
       img.crossOrigin = 'anonymous';
       img.onload  = () => res(img);
@@ -690,58 +701,51 @@ async function generaPDF(formato) {
     });
 
     if (foto) {
-      const fotoH = Math.round(LH * 0.58); // 58% altezza — foto grande
-      const fotoW = LW - PAD * 2;
-
-      // Canvas per crop centrato
-      const c = document.createElement('canvas');
-      const scale = 2;
-      c.width  = fotoW  * scale * (96/25.4); // px
-      c.height = fotoH  * scale * (96/25.4);
+      // Canvas con crop centrato ad alta qualità
+      const sc  = Math.max(IW*3.78 / foto.width, fotoH*3.78 / foto.height);
+      const cw  = Math.round(IW  * 3.78);
+      const ch  = Math.round(fotoH * 3.78);
+      const c   = document.createElement('canvas');
+      c.width = cw; c.height = ch;
       const ctx = c.getContext('2d');
       ctx.fillStyle = '#fff';
-      ctx.fillRect(0,0,c.width,c.height);
-      const sc = Math.max(c.width/foto.width, c.height/foto.height);
-      const sw = c.width/sc, sh = c.height/sc;
-      const sx = (foto.width-sw)/2, sy = (foto.height-sh)/2;
-      ctx.drawImage(foto, sx, sy, sw, sh, 0, 0, c.width, c.height);
-
-      doc.addImage(c.toDataURL('image/jpeg',0.92), 'JPEG', PAD, curY, fotoW, fotoH, undefined, 'MEDIUM');
+      ctx.fillRect(0,0,cw,ch);
+      const sw = foto.width/sc*3.78, sh = foto.height/sc*3.78;
+      // Usa drawImage con source crop
+      const srcW = foto.width  * (cw / (foto.width  * sc));
+      const srcH = foto.height * (ch / (foto.height * sc));
+      const srcX = (foto.width  - srcW) / 2;
+      const srcY = (foto.height - srcH) / 2;
+      ctx.drawImage(foto, srcX, srcY, srcW, srcH, 0, 0, cw, ch);
+      doc.addImage(c.toDataURL('image/jpeg',0.92),'JPEG', PAD, curY, IW, fotoH,'','MEDIUM');
       curY += fotoH + 2;
-
-      // Linea separatrice
       doc.setDrawColor(220,220,220);
       doc.setLineWidth(0.3);
-      doc.line(PAD, curY, LW-PAD, curY);
+      doc.line(PAD, curY, W-PAD, curY);
       curY += 2;
     }
   }
 
-  // Art
-  const artFontMm = 5.5;
+  // ART
+  const artPt = Math.floor(6 / 0.3528);
   doc.setFont('courier','bold');
-  doc.setFontSize(artFontMm * 2.835);
+  doc.setFontSize(artPt);
   doc.setTextColor(0,0,0);
-  doc.text(artStr, PAD, curY + artFontMm * 0.85);
-  curY += artFontMm * 1.5;
+  doc.text(artStr, PAD, curY + 6 * 0.85);
+  curY += 9;
 
-  // Barcode — stretto e centrato
-  const bcW  = LW - PAD * 2;
-  const bcH  = 16; // mm — compatto
-  const bcCanvas = await barcodeToCanvas(codeStr, 700, 120);
-  doc.addImage(bcCanvas.toDataURL('image/png'), 'PNG', PAD, curY, bcW, bcH, undefined, 'FAST');
-  curY += bcH + 1.5;
+  // BARCODE compatto
+  const bcH_mm = 14;
+  const bcC    = await barcodeCanvas(codeStr, IW, bcH_mm);
+  doc.addImage(bcC.toDataURL('image/png'),'PNG', PAD, curY, IW, bcH_mm,'','FAST');
+  curY += bcH_mm + 1.5;
 
-  // Codice sotto barcode — font massimo
-  const codeFontMm = Math.min(
-    (LW - PAD*2) / (codeStr.length * 0.52),
-    4.5
-  );
-  doc.setFontSize(codeFontMm * 2.835);
-  doc.text(codeStr, LW/2, curY + codeFontMm * 0.85, { align: 'center' });
+  // CODICE — tutta la larghezza
+  const codePt = Math.min(fontPtPerLarghezza(codeStr, IW), Math.floor(5/0.3528));
+  doc.setFontSize(codePt);
+  doc.text(codeStr, W/2, curY + codePt*0.3528*0.85, {align:'center'});
 
-  const nomeFile = codeStr + '_scheda.pdf';
-  doc.save(nomeFile);
+  doc.save(codeStr + '_scheda_A6.pdf');
 }
 
 function stampa()         { generaPDF(currentLabel._formato || '5x3'); }
